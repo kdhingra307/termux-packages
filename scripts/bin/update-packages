@@ -133,21 +133,8 @@ declare -a _ALREADY_SEEN=() # Array of packages successfully updated or skipped.
 # The key difference is that we make the process concurrent, allowing us to fetch tags simultaneously rather than one at a time.
 # Once all tags are cached, the termux_pkg_auto_update function will operate much more quickly.
 # We avoid packages with overwritten termux_pkg_auto_update to prevent unexpected modifications to the package`s build.sh.
+# shellcheck disable=SC2015
 _fetch_and_cache_tags() {
-	if [ "$(uname -o)" = "Android" ] || [ -e "/system/bin/app_process" ]; then
-		if ! command -v ninja &> /dev/null; then
-			echo "INFO: Skipping fetching and caching tags. Package 'ninja' is not installed."
-			return 0
-		fi
-	fi
-
-	if ! command -v ninja &> /dev/null; then
-		echo "INFO: Fetching ninja build system"
-		. "${TERMUX_SCRIPTDIR}"/scripts/build/termux_download.sh
-		. "${TERMUX_SCRIPTDIR}"/scripts/build/setup/termux_setup_ninja.sh
-		TERMUX_ON_DEVICE_BUILD=false TERMUX_COMMON_CACHEDIR=/tmp TERMUX_PKG_TMPDIR=/tmp termux_setup_ninja
-	fi
-
 	echo "INFO: Fetching and caching tags"
 
 	# First invocation of termux_repology_api_get_latest_version fetches and caches repology metadata.
@@ -159,11 +146,8 @@ _fetch_and_cache_tags() {
 		for pkg_dir in "${repo_dir}"/*; do
 			quiet _should_update "${pkg_dir}" || continue # Skip if not needed.
 			grep -q '^termux_pkg_auto_update' "${pkg_dir}/build.sh" && continue # Skip if package has custom auto-update
-			if grep '^TERMUX_PKG_SRCURL=' "${pkg_dir}/build.sh" | grep -q 'github.com'; then
-				__GITHUB_PACKAGES+=("${pkg_dir}")
-			else
-				__PACKAGES+=("${pkg_dir}")
-			fi
+			grep -qE '^TERMUX_PKG_SRCURL=.*github\.com' "$pkg_dir/build.sh" && __GITHUB_PACKAGES+=("${pkg_dir}") || :
+			__PACKAGES+=("${pkg_dir}")
 		done
 	done
 
@@ -200,7 +184,7 @@ _fetch_and_cache_tags() {
 		unset PKG_SRCURL TAG_TYPE OWNER REPO
 	done
 
-	# This is called indirectly in the ninja file
+	# This is called indirectly in subshell
 	# So silence shellcheck's unreachable code warning
 	# shellcheck disable=SC2317
 	__main__() {
@@ -212,26 +196,33 @@ _fetch_and_cache_tags() {
 			source "${i}"
 		done
 		set -eu
+
+		# PKG means regular version to be cached normally.
+		# SKIP means we know package is up to date and we can safely skip checks.
+		# LOCAL is for obtaining current package version, to be compared with version obtained with GraphQL
+
+		termux_github_api_get_tag() {
+			echo "LOCAL|${TERMUX_PKG_NAME}|${TERMUX_PKG_VERSION#*:}"
+			exit 0
+		}
 		termux_pkg_upgrade_version() {
-			[[ -n "$1" ]] && echo "PKG|$TERMUX_PKG_NAME|${1#*:}"
+			local action; action="$( [[ "${1:-}" == "${TERMUX_PKG_VERSION#*:}" ]] && echo SKIP || echo PKG )"
+			[[ "${1:-}" == "LOCAL|"* ]] && { echo "$1"; exit 0; } # Forwarded from termux_github_api_get_tag
+			[[ -n "$1" ]] && echo "${action}|${TERMUX_PKG_NAME}|${1#*:}"
 			exit 0
 		}
 		termux_repology_auto_update() {
-			echo "PKG|$TERMUX_PKG_NAME|$(termux_repology_api_get_latest_version "${TERMUX_PKG_NAME}" | sed "s/^null$/${TERMUX_PKG_VERSION#*:}/")"
+			local ver; ver="$(termux_repology_api_get_latest_version "${TERMUX_PKG_NAME}")"
+			if [[ "${ver}" == "null" ]]; then
+				# it returns `null` in the case if the version is up to date so we can safely skip the package
+				echo "SKIP|${TERMUX_PKG_NAME}|${TERMUX_PKG_VERSION#*:}"
+			else
+				# The package needs to be updated
+				echo "PKG|${TERMUX_PKG_NAME}|${ver}"
+			fi
 			exit 0
 		}
 		termux_pkg_auto_update
-	}
-
-	# This function generates a ninja file for all packages in the ${__PACKAGES[@]}
-	# So shut up shellcheck nagging us about using `sed`
-	# shellcheck disable=SC2001
-	__generate__() {
-		echo "rule update"
-		echo " command = bash -c \"\$\$F\" -- \$pkg_dir || :"
-		sed 's/[^ ]\+/\nbuild &: update\n pkg_dir=&/g' <<< "${__PACKAGES[@]}"
-		echo "build run_all: phony ${__PACKAGES[*]}"
-		echo "default run_all"
 	}
 
 	echo "INFO: Fetching GitHub packages via GraphQL API"
@@ -240,17 +231,27 @@ _fetch_and_cache_tags() {
 	)"
 
 	echo "INFO: Fetching non-GitHub packages"
-	local LATEST_TAGS='' LATEST_TAGS_GITHUB=''
+	local LATEST_TAGS=''
 	LATEST_TAGS="$(
-		F="$(declare -p TERMUX_SCRIPTDIR GITHUB_TOKEN TERMUX_REPOLOGY_DATA_FILE); $(declare -f __main__ | sed 's/__main__ ()//')" \
-		env --chdir=/tmp ninja -f /dev/stdin < <(__generate__) |& grep "^PKG|"
+		export -f __main__
+		export TERMUX_SCRIPTDIR GITHUB_TOKEN TERMUX_REPOLOGY_DATA_FILE
+		printf '%s\0' "${__PACKAGES[@]}" | xargs -0 -n1 -P"$(nproc)" bash -c '__main__ "$@"' _ |& grep -E '^(LOCAL|PKG|SKIP)\|'
 	)"
-	unset -f __main__ __generate__
+	unset -f __main__
 
-	while IFS='|' read -r _ pkg version; do
+	declare -A __GITHUB_CURRENT_TAGS=()
+	while IFS='|' read -r type pkg version; do
+		if [[ "${type}" == "LOCAL" ]]; then # Current git-originated package version
+			__GITHUB_CURRENT_TAGS["${pkg:-_}"]="$version"
+			continue
+		fi
 		_LATEST_TAGS["${pkg:-_}"]="$version"
+		if [[ "${type}" == "SKIP" ]] || [[ "${type}" == "GIT" && "${__GITHUB_CURRENT_TAGS["${pkg:-}"]:-}" == "${version#v}" ]]; then
+			echo "INFO: Skipping ${pkg}: already at version ${version#v}"
+			_ALREADY_SEEN+=("${pkg}")
+		fi
 	done < <(printf '%s\n' "$LATEST_TAGS" "$LATEST_TAGS_GITHUB")
-	quiet declare -p _LATEST_TAGS
+	unset __GITHUB_CURRENT_TAGS
 }
 
 _check_updated() {
@@ -451,7 +452,7 @@ _gh_create_new_issue() {
 			--title "Auto update failing for ${pkg_name}" \
 			--body "${body:0:${max_body_length}}" \
 			--label "auto update failing" --label "bot" \
-			--assignee ${assignee} |
+			--assignee "${assignee}" |
 			grep -oE "[0-9]+" # Last component of the URL returned is the issue number.
 	)
 	if [ -z "${issue_number}" ]; then
