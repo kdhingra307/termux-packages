@@ -8,7 +8,7 @@ TERMUX_PKG_DEPENDS="libc++, libopenblas, python"
 TERMUX_PKG_BUILD_IN_SRC=true
 TERMUX_PKG_AUTO_UPDATE=true
 TERMUX_PKG_UPDATE_TAG_TYPE="latest-release-tag"
-TERMUX_PKG_PYTHON_COMMON_DEPS="'setuptools==59.2.0', 'wheel==0.38.1', 'Cython>=0.29.34,<3.1'"
+TERMUX_PKG_PYTHON_COMMON_DEPS="wheel, 'Cython>=0.29.34,<3.1', 'meson-python>=0.15.0,<0.16.0', build"
 TERMUX_PKG_RM_AFTER_INSTALL="
 bin/
 "
