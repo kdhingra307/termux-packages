@@ -39,8 +39,8 @@ termux_step_make() {
 }
 
 termux_step_make_install() {
-	install -Dm700 -t "${TERMUX_PREFIX}"/bin target/"${CARGO_TARGET_NAME}"/release/uv
-	install -Dm700 -t "${TERMUX_PREFIX}"/bin target/"${CARGO_TARGET_NAME}"/release/uvx
+	# install -Dm700 -t "${TERMUX_PREFIX}"/bin target/"${CARGO_TARGET_NAME}"/release/uv
+	# install -Dm700 -t "${TERMUX_PREFIX}"/bin target/"${CARGO_TARGET_NAME}"/release/uvx
 
 	# Build a Python wheel using maturin
 	maturin build --release --strip --target "${CARGO_TARGET_NAME}" -o "${TERMUX_PKG_BUILDDIR}/dist"
