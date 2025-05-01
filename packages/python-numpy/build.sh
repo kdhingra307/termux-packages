@@ -7,7 +7,7 @@ TERMUX_PKG_SRCURL=git+https://github.com/numpy/numpy
 TERMUX_PKG_DEPENDS="libc++, libopenblas, python"
 TERMUX_PKG_AUTO_UPDATE=true
 TERMUX_PKG_UPDATE_TAG_TYPE="latest-release-tag"
-TERMUX_PKG_PYTHON_COMMON_DEPS="wheel, 'Cython>=0.29.34,<3.1', 'meson-python>=0.15.0,<0.16.0', build, 'setuptools[distutils]'"
+TERMUX_PKG_PYTHON_COMMON_DEPS="wheel, 'Cython>=0.29.34,<3.1', 'meson-python>=0.15.0,<0.16.0', build"
 
 TERMUX_MESON_WHEEL_CROSSFILE="$TERMUX_PKG_TMPDIR/wheel-cross-file.txt"
 TERMUX_PKG_EXTRA_CONFIGURE_ARGS="
@@ -51,10 +51,8 @@ termux_step_configure() {
 		_meson_stripflag=
 	fi
 
-	# Ensure distutils availability
-	PYTHONPATH="$PYTHONPATH:$TERMUX_PKG_SRCDIR/tools" \
-	CC=gcc CXX=g++ CFLAGS= CXXFLAGS= CPPFLAGS= LDFLAGS= \
-		build-python $TERMUX_PKG_SRCDIR/vendored-meson/meson/meson.py \
+	local _custom_meson="build-python $TERMUX_PKG_SRCDIR/vendored-meson/meson/meson.py"
+	CC=gcc CXX=g++ CFLAGS= CXXFLAGS= CPPFLAGS= LDFLAGS= $_custom_meson \
 		$TERMUX_PKG_SRCDIR \
 		$TERMUX_PKG_BUILDDIR \
 		--cross-file $TERMUX_MESON_CROSSFILE \
@@ -67,10 +65,6 @@ termux_step_configure() {
 
 termux_step_make() {
 	pushd $TERMUX_PKG_SRCDIR
-
-	# Ensure setuptools with distutils is installed in the crossenv
-	pip install --upgrade 'setuptools[distutils]' || true
-
 	python -m build -w -n -x --config-setting builddir=$TERMUX_PKG_BUILDDIR .
 	popd
 }
