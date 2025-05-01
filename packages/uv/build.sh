@@ -3,10 +3,9 @@ TERMUX_PKG_DESCRIPTION="An extremely fast Python package installer and resolver,
 TERMUX_PKG_LICENSE="Apache-2.0, MIT"
 TERMUX_PKG_LICENSE_FILE="LICENSE-APACHE, LICENSE-MIT"
 TERMUX_PKG_MAINTAINER="@termux"
-TERMUX_PKG_VERSION="0.7.2"
+TERMUX_PKG_VERSION="0.5.8"
 TERMUX_PKG_REVISION=1
 TERMUX_PKG_SRCURL=https://github.com/astral-sh/uv/archive/refs/tags/${TERMUX_PKG_VERSION}.tar.gz
-TERMUX_PKG_SHA256=bf42c698cff01e7f383351efce7f014af788810fa77d41a8f4a853e073582d1e
 TERMUX_PKG_DEPENDS="zstd"
 TERMUX_PKG_BUILD_IN_SRC=true
 TERMUX_PKG_AUTO_UPDATE=true
@@ -15,11 +14,7 @@ termux_step_pre_configure() {
 	termux_setup_cmake
 	termux_setup_rust
 
-	# Dummy CMake toolchain file to workaround build error:
-	# error: failed to run custom build command for `libz-ng-sys v1.1.15`
-	# ...
-	# CMake Error at /home/builder/.termux-build/_cache/cmake-3.28.3/share/cmake-3.28/Modules/Platform/Android-Determine.cmake:217 (message):
-	# Android: Neither the NDK or a standalone toolchain was found.
+	# Dummy CMake toolchain file to workaround build error
 	export TARGET_CMAKE_TOOLCHAIN_FILE="${TERMUX_PKG_BUILDDIR}/android.toolchain.cmake"
 	touch "${TERMUX_PKG_BUILDDIR}/android.toolchain.cmake"
 
@@ -30,7 +25,11 @@ termux_step_pre_configure() {
 	cargo fetch --target "${CARGO_TARGET_NAME}"
 
 	patch -p1 -d "${CARGO_HOME}"/registry/src/*/sys-info-* \
-	-i "${TERMUX_PKG_BUILDER_DIR}"/0001-sys-info-replace-index-with-strchr.diff
+		-i "${TERMUX_PKG_BUILDER_DIR}"/0001-sys-info-replace-index-with-strchr.diff
+
+	# Install maturin locally for building the wheel
+	cargo install maturin --version 1.4.0 --locked --root "$TERMUX_PKG_TMPDIR/maturin"
+	export PATH="$TERMUX_PKG_TMPDIR/maturin/bin:$PATH"
 }
 
 termux_step_make() {
@@ -42,6 +41,9 @@ termux_step_make() {
 termux_step_make_install() {
 	install -Dm700 -t "${TERMUX_PREFIX}"/bin target/"${CARGO_TARGET_NAME}"/release/uv
 	install -Dm700 -t "${TERMUX_PREFIX}"/bin target/"${CARGO_TARGET_NAME}"/release/uvx
+
+	# Build a Python wheel using maturin
+	maturin build --release --strip --target "${CARGO_TARGET_NAME}" -o "${TERMUX_PKG_BUILDDIR}/dist"
 }
 
 termux_step_post_make_install() {
